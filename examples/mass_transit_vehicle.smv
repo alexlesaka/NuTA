@@ -10,9 +10,6 @@ VAR
 	incoherence_contactor_relay: Incoherence_contactor_relay;
 	premature_opening: Premature_opening;
 
-TRANS
-	--prueba
-	((ener1.wa2em1)->(ener2.status=CHARGING));
 
 
 
