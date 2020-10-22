@@ -11,8 +11,6 @@ VAR
 	premature_opening: Premature_opening;
 
 
-
-
 MODULE Energization (otherEner, contactor_disabler, sectionalizer, 
 	incoherence_contactors, incoherence_contactor_voltage, incoherence_contactor_relay, 
 	premature_opening)
@@ -38,13 +36,17 @@ INIT
 	
 DEFINE
 	--Are there inconsistences? 
-	incoherences :=  (incoherence_contactors.status!=NORMAL 
-		 & incoherence_contactors.status!=INCOHERENCE_CHARGING) |
-		incoherence_contactor_voltage.status!=NORMAL;
+	incoherences :=  
+			(incoherence_contactors.status!=NORMAL 
+			 & incoherence_contactors.status!=INCOHERENCE_CHARGING) |
+			incoherence_contactor_voltage.status!=NORMAL |
+			incoherence_contactor_relay.status!=NORMAL;
+
 	-- status = IDLE
 	id2ch := 
 		--Normal run
-		timerIdle=mt2s & connection_stablished=1 &
+		timerIdle=mt2s & connection_stablished=1 & 
+		contactor_disabler.status=ENABLED & ( sectionalizer.status=OPEN | sectionalizer.status=CLOSED ) &
 		--not emergency 1
 		!incoherences & em=0 &
 		!(otherEner.status=EMERGENCY1 & otherEner.timerEmergency1=mt20s) &
@@ -63,7 +65,9 @@ DEFINE
 	-- status = CHARGING
 	ch2wa := 
 		--Normal way
-		connection_stablished=0 &
+		(connection_stablished=0 | sectionalizer.status=TRANS_OPEN | 
+			sectionalizer.status=TRANS_CLOSED | 
+			sectionalizer.status=UNDEFINED ) &
 		--not emergency 1
 		em=0 & otherEner.status!=EMERGENCY1 &
 		--not emergency 2
@@ -97,7 +101,8 @@ DEFINE
 	em22id := 
 		!incoherences &
 		--not emergency 1
-		em=0 & timerEmergency2=mt2s &  !(otherEner.status=EMERGENCY1 
+		em=0 & timerEmergency2=mt2s 
+			&  !(otherEner.status=EMERGENCY1 
 			& otherEner.timerEmergency1=mt20s)&
 		--not emergency 2
 		overc=0;
@@ -106,26 +111,26 @@ DEFINE
 
 TRANS
 	
-	((status=IDLE & id2ch)->next(status=CHARGING))&
-	((status=IDLE & id2em1)->next(status=EMERGENCY1)) &
-	((status=IDLE & id2em2)->next(status=EMERGENCY2)) &
-	((status=CHARGING & ch2wa) -> next(status=WAITING)) &
-	((status=CHARGING & ch2em1)		->	next(status=EMERGENCY1)) &
-	((status=CHARGING & ch2em2)		-> 	next(status=EMERGENCY2)) &
-	((status=WAITING & wa2id)	->	next(status=IDLE)) &
-	((status=WAITING & wa2em1)	->	next(status=EMERGENCY1)) &
-	((status=WAITING & wa2em2)	->	next(status=EMERGENCY2)) &
-	((status=EMERGENCY1 & em12id)	->	next(status=IDLE)) &
-	((status=EMERGENCY2 & em22id)	->	next(status=IDLE)) &
-	((status=EMERGENCY2 & em22em1)	->	next(status=EMERGENCY1)) &
+((status=IDLE & id2ch)->next(status=CHARGING))&
+((status=IDLE & id2em1)->next(status=EMERGENCY1)) &
+((status=IDLE & id2em2)->next(status=EMERGENCY2)) &
+((status=CHARGING & ch2wa) -> next(status=WAITING)) &
+((status=CHARGING & ch2em1)	->	next(status=EMERGENCY1)) &
+((status=CHARGING & ch2em2)		-> 	next(status=EMERGENCY2)) &
+((status=WAITING & wa2id)	->	next(status=IDLE)) &
+((status=WAITING & wa2em1)	->	next(status=EMERGENCY1)) &
+((status=WAITING & wa2em2)	->	next(status=EMERGENCY2)) &
+((status=EMERGENCY1 & em12id)	->	next(status=IDLE)) &
+((status=EMERGENCY2 & em22id)	->	next(status=IDLE)) &
+((status=EMERGENCY2 & em22em1)	->	next(status=EMERGENCY1)) &
 
 	--Important! if there are not any satisfied transition contition 
 	--it must remains in the same status (Total transitions)
-	((status=IDLE & !id2ch & !id2em1 & !id2em2)			-> 	next(status=IDLE)) &
-	((status=CHARGING & !ch2wa & !ch2em1 & !ch2em2) 	-> 	next(status=CHARGING)) &
-	((status=WAITING & !wa2id & !wa2em1 & !wa2em2) 		-> 	next(status=WAITING)) &
-	((status=EMERGENCY1 & !em12id) 						-> 	next(status=EMERGENCY1)) &
-	((status=EMERGENCY2 & !em22id & !em22em1) 			-> 	next(status=EMERGENCY2));
+((status=IDLE & !id2ch & !id2em1 & !id2em2)			-> 	next(status=IDLE)) &
+((status=CHARGING & !ch2wa & !ch2em1 & !ch2em2) 	-> 	next(status=CHARGING)) &
+((status=WAITING & !wa2id & !wa2em1 & !wa2em2) 		-> 	next(status=WAITING)) &
+((status=EMERGENCY1 & !em12id) 						-> 	next(status=EMERGENCY1)) &
+((status=EMERGENCY2 & !em22id & !em22em1) 			-> 	next(status=EMERGENCY2));
 	
 FAIRNESS TRUE;
 
@@ -143,7 +148,6 @@ FAIRNESS TRUE;
 --LTLSPEC G!(em22id)
 --LTLSPEC G!(em22em1)
 --LTLSPEC G!(em12id)
-
 --Total transition? : comment COMPLETE TRANS clause. If there is a counterexample you should included the "else case"
 --LTLSPEC G(status=IDLE -> (id2ch | id2em1 | id2em2))
 --LTLSPEC G(status=CHARGING -> (ch2wa | ch2em1 | ch2em2))
@@ -173,7 +177,7 @@ VAR
 	
 MODULE Sectionalizer
 VAR
-	status: {START, UNDEFINED, IDLE, CHARGING, CHARGING_A, TRANS_IDLE, IDLE_A, TRANS_CHARGING};
+	status: {START, UNDEFINED, OPEN, CLOSED, CLOSED_A, TRANS_OPEN, OPEN_A, TRANS_CLOSED};
 	
 MODULE Incoherence_contactors
 VAR
@@ -190,4 +194,3 @@ VAR
 MODULE Premature_opening
 VAR
 	status: {NORMAL,Premature_opening};
-

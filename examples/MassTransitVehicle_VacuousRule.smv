@@ -1,0 +1,199 @@
+MODULE main
+
+VAR 
+	ener1: Energization(ener2, contactor_disabler, sectionalizer, incoherence_contactors, incoherence_contactor_voltage, incoherence_contactor_relay, premature_opening);
+	ener2: Energization(ener1, contactor_disabler, sectionalizer, incoherence_contactors, incoherence_contactor_voltage, incoherence_contactor_relay, premature_opening);
+	contactor_disabler : Contactor_disabler;
+	sectionalizer: Sectionalizer;
+	incoherence_contactors: Incoherence_contactors;
+	incoherence_contactor_voltage: Incoherence_contactor_voltage;
+	incoherence_contactor_relay: Incoherence_contactor_relay;
+	premature_opening: Premature_opening;
+
+
+MODULE Energization (otherEner, contactor_disabler, sectionalizer, 
+	incoherence_contactors, incoherence_contactor_voltage, incoherence_contactor_relay, 
+	premature_opening)
+	--otherEner: the redundant system
+
+VAR
+	status: {IDLE, CHARGING, WAITING, EMERGENCY1, EMERGENCY2};
+	--Timers
+	timerIdle: {idle, mt2s};
+	timerWaiting: {idle, mt500ms};
+	timerEmergency1: {idle, mt2s, mt20s};
+	timerEmergency2: {idle, mt2s, mt20s};
+	timer_em_handdled: {idle, mt5s};
+	
+IVAR
+	connection_stablished: {0,1}; 
+	em: {0,1};  
+	overc:{0,1}; 
+	em_handled: {0,1}; 
+
+INIT
+	status=IDLE;
+	
+DEFINE
+	--Are there inconsistences? 
+	incoherences :=  
+			(incoherence_contactors.status!=NORMAL 
+			 & incoherence_contactors.status!=INCOHERENCE_CHARGING) |
+			incoherence_contactor_voltage.status!=NORMAL |
+			incoherence_contactor_relay.status!=NORMAL;
+	-- status = IDLE
+	id2ch := 
+		--Normal run
+		timerIdle=mt2s & connection_stablished=1 & 
+		contactor_disabler.status=ENABLED & ( sectionalizer.status=OPEN | sectionalizer.status=CLOSED ) &
+		--not emergency 1
+		!incoherences & em=0 &
+		!(otherEner.status=EMERGENCY1 & otherEner.timerEmergency1=mt20s) &
+		--not emergency 2
+		overc=0 &
+		!(otherEner.status=EMERGENCY2 & otherEner.timerEmergency2=mt20s);
+	id2em1 := 
+		--Emergency 1: incoherences | emergencia | redundant mt20s
+		incoherences | em=1  | (otherEner.status=EMERGENCY1 & otherEner.timerEmergency1=mt20s);
+	id2em2 := 
+		--not emergency 1
+		!incoherences & em=0 & !(otherEner.status=EMERGENCY1 & otherEner.timerEmergency1=mt20s) &
+		--Emergency 2: overc | redundant mt20s
+		( overc=1 | (otherEner.status=EMERGENCY2 
+			& otherEner.timerEmergency2=mt20s));
+	-- status = CHARGING
+	ch2wa := 
+		--Normal way
+		(connection_stablished=0 | sectionalizer.status=TRANS_OPEN | 
+			sectionalizer.status=TRANS_CLOSED | 
+			sectionalizer.status=UNDEFINED ) &
+		--not emergency 1
+		em=0 & otherEner.status!=EMERGENCY1 &
+		--not emergency 2
+		overc=0 & otherEner.status!=EMERGENCY2 ; --Requirement RSCCS_068
+	ch2em1 := 
+		em=1 | otherEner.status=EMERGENCY1; -- Requirement RSCCS_070
+	ch2em2 := 
+		--not emergency 1
+		em=0 & otherEner.status!=EMERGENCY1 & 
+		-- emergency 2
+		(overc=1 | otherEner.status=EMERGENCY2 ); -- Requirement RSCCS_231
+	--status = WAITING
+	wa2id := 
+		--Normal timer_em_handdled 
+		timerWaiting=mt500ms 
+		-- not emergency 1
+		& em=0 & otherEner.status!=EMERGENCY1 & 
+		--not emergency 2
+		overc=0 & otherEner.status!=EMERGENCY2;
+	wa2em1 := 
+		em=1 | otherEner.status=EMERGENCY1;
+	wa2em2 := 
+		-- emergency 2
+		(overc=1 | otherEner.status=EMERGENCY2) & 
+		-- not emergency 1
+		em=0 & otherEner.status!=EMERGENCY1;
+	--status = EMERGENCY 1
+	em12id :=  
+		!incoherences & em=0 & timerEmergency1=mt2s & em_handled=1;
+	--status = EMERGENCY 2
+	em22id := 
+		!incoherences &
+		--not emergency 1
+		em=0 & timerEmergency2=mt2s 
+			&  !(otherEner.status=EMERGENCY1 
+			& otherEner.timerEmergency1=mt20s)&
+		--not emergency 2
+		overc=0;
+	em22em1 :=  
+		incoherences | em=1 | (otherEner.status=EMERGENCY1 & otherEner.timerEmergency1=mt20s);
+
+TRANS
+	
+((status=IDLE & id2ch)->next(status=CHARGING))&
+
+--VACUOUS TRANSITION: NEVER TRUE IN THE SYSTEM
+((status=IDLE & next(status=WAITING))->next(status=CHARGING))&
+
+((status=IDLE & id2em1)->next(status=EMERGENCY1)) &
+((status=IDLE & id2em2)->next(status=EMERGENCY2)) &
+((status=CHARGING & ch2wa) -> next(status=WAITING)) &
+((status=CHARGING & ch2em1)	->	next(status=EMERGENCY1)) &
+((status=CHARGING & ch2em2)		-> 	next(status=EMERGENCY2)) &
+((status=WAITING & wa2id)	->	next(status=IDLE)) &
+((status=WAITING & wa2em1)	->	next(status=EMERGENCY1)) &
+((status=WAITING & wa2em2)	->	next(status=EMERGENCY2)) &
+((status=EMERGENCY1 & em12id)	->	next(status=IDLE)) &
+((status=EMERGENCY2 & em22id)	->	next(status=IDLE)) &
+((status=EMERGENCY2 & em22em1)	->	next(status=EMERGENCY1)) &
+
+	--Important! if there are not any satisfied transition contition 
+	--it must remains in the same status (Total transitions)
+((status=IDLE & !id2ch & !id2em1 & !id2em2)			-> 	next(status=IDLE)) &
+((status=CHARGING & !ch2wa & !ch2em1 & !ch2em2) 	-> 	next(status=CHARGING)) &
+((status=WAITING & !wa2id & !wa2em1 & !wa2em2) 		-> 	next(status=WAITING)) &
+((status=EMERGENCY1 & !em12id) 						-> 	next(status=EMERGENCY1)) &
+((status=EMERGENCY2 & !em22id & !em22em1) 			-> 	next(status=EMERGENCY2));
+	
+FAIRNESS TRUE;
+
+--Vacuous Transition? : comment COMPLETE TRANS clause. Expecting Counterexample.
+--EXPECTING COUNTEREXAMPLE:
+--LTLSPEC G!(id2ch)
+--LTLSPEC G!(id2em1)
+--LTLSPEC G!(id2em2)
+--LTLSPEC G!(ch2wa)
+--LTLSPEC G!(ch2em1)
+--LTLSPEC G!(ch2em2)
+--LTLSPEC G!(wa2id)
+--LTLSPEC G!(wa2em1)
+--LTLSPEC G!(wa2em2)
+--LTLSPEC G!(em22id)
+--LTLSPEC G!(em22em1)
+--LTLSPEC G!(em12id)
+--Total transition? : comment COMPLETE TRANS clause. If there is a counterexample you should included the "else case"
+--LTLSPEC G(status=IDLE -> (id2ch | id2em1 | id2em2))
+--LTLSPEC G(status=CHARGING -> (ch2wa | ch2em1 | ch2em2))
+--LTLSPEC G(status=WAITING -> (wa2id | wa2em1 | wa2em2))
+--LTLSPEC G(status=EMERGENCY1 -> em12id)
+--LTLSPEC G(status=EMERGENCY2 -> (em22em1 | em22id))
+
+--Inconsistent transition: comment COMPLETE TRANS clause. Expecting Counterexample.
+
+--LTLSPEC G!(id2ch & id2em1)
+--LTLSPEC G!(id2ch & id2em2)
+--LTLSPEC G!(id2em1 & id2em2)
+
+--LTLSPEC G!(ch2wa & ch2em1)
+--LTLSPEC G!(ch2wa & ch2em2)
+--LTLSPEC G!(ch2em1 & ch2em2)
+
+--LTLSPEC G!(wa2id & wa2em1)
+--LTLSPEC G!(wa2id & wa2em2)
+--LTLSPEC G!(wa2em1 & wa2em2)
+
+--LTLSPEC G!(em22em1 & em22id)
+
+MODULE Contactor_disabler
+VAR 
+	status: {ENABLED,DISABLED};
+	
+MODULE Sectionalizer
+VAR
+	status: {START, UNDEFINED, OPEN, CLOSED, CLOSED_A, TRANS_OPEN, OPEN_A, TRANS_CLOSED};
+	
+MODULE Incoherence_contactors
+VAR
+	status: {NORMAL, INCOHERENCE_CHARGING, INCOHERENCE_IDLE};
+	
+MODULE Incoherence_contactor_voltage
+VAR
+	status: {NORMAL, INCOHERENCE};
+	
+MODULE Incoherence_contactor_relay
+VAR
+	status: {NORMAL, INCOHERENCE_A, INCOHERENCE_B};
+	
+MODULE Premature_opening
+VAR
+	status: {NORMAL,Premature_opening};
